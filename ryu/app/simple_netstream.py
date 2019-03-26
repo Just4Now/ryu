@@ -19,14 +19,14 @@ SIZE_OF_HEADER = 24
 SIZE_OF_RECORD = 48
 MAX_SIZE_OF_NS_PACKET = 1500
 IP_TCP = 6
-POLLING_TIME = 300
+POLLING_TIME = 60
 MAX_ENTROPY_COUNT = 120
 
 src_ip_entropy = [[], []]
 dst_ip_entropy = [[], []]
 src_port_entropy = [[], []]
 dst_port_entropy = [[], []]
-bytes_per_entropy = [[], []]
+bytes_per_pkt_entropy = [[], []]
 
 class MySimpleSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -35,10 +35,8 @@ class MySimpleSwitch(app_manager.RyuApp):
         super(MySimpleSwitch, self).__init__(*args, **kwargs)
         self.mac_table = {}
         self.que = Queue()
-        #实际值 预测值 
-
-        self.recv_ns_pkt = Process(target=parser_netstream_packet, args=(self.que,))
-        self.detect_anomaly = Process(target=detect_tcp_syn_flood, args=(self.que,))
+        self.recv_ns_pkt = Process(target=self.parser_netstream_packet)
+        self.detect_anomaly = Process(target=self.detect_tcp_syn_flood)
         self.recv_ns_pkt.start()
         self.detect_anomaly.start()
         #self.recv_ns_pkt.terminate()
@@ -112,125 +110,127 @@ class MySimpleSwitch(app_manager.RyuApp):
                                       actions, data)
         datapath.send_msg(req)
 
-def detect_tcp_syn_flood(que):
-    timestamp = time.time()
-    src_ip = {}
-    dst_ip = {}
-    src_port = {}
-    dst_port = {}
-    bytes_per_pkt = {}
-    flow_count = 0
-    alpha = 0.1
-    while True:
-        nsdata = que.get(True)
-        diff_time = timestamp - nsdata['timestamp']
-        if diff_time > 0:
-            flow_count = flow_count + 1
-            check_if_exists(nsdata['src_ip'], src_ip)
-            check_if_exists(nsdata['dst_ip'], dst_ip)
-            check_if_exists(nsdata['src_port'], src_port)
-            check_if_exists(nsdata['dst_port'], dst_port)
-            check_if_exists(nsdata['bytes_per_pkt'], bytes_per_pkt)
+    def detect_tcp_syn_flood(self):
+
+        if  not src_ip_entropy[0] and self.que.empty():
+            time.sleep(POLLING_TIME)
+
+        timestamp = int(time.time())
+        src_ip = {}
+        dst_ip = {}
+        src_port = {}
+        dst_port = {}
+        bytes_per_pkt = {}
+        flow_count = 0
+        alpha = 0.1
+
+        while not self.que.empty():
+            #self.logger.info("que length: %s", self.que.qsize())
+            nsdata = self.que.get(True)
+            self.logger.info('detect_tcp_syn_flood nsdata: %s', nsdata)
+            diff_time = timestamp - nsdata['timestamp']
+            if diff_time > 0:
+                flow_count = flow_count + 1
+                check_if_exists(nsdata['src_ip'], src_ip)
+                check_if_exists(nsdata['dst_ip'], dst_ip)
+                check_if_exists(nsdata['src_port'], src_port)
+                check_if_exists(nsdata['dst_port'], dst_port)
+                check_if_exists(nsdata['bytes_per_pkt'], bytes_per_pkt)
+            else:
+                self.que.put(nsdata)
+                break
+        #calculate information entropy
+        curr_src_ip_entropy = cal_info_entropy(flow_count, src_ip)
+        curr_dst_ip_entropy = cal_info_entropy(flow_count, src_ip)
+        curr_src_port_entropy = cal_info_entropy(flow_count, src_ip)
+        curr_dst_port_entropy = cal_info_entropy(flow_count, src_ip)
+        curr_bytes_per_pkt_entropy = cal_info_entropy(flow_count, src_ip)
+
+        #use exponential smoothing predicting model
+        if not src_ip_entropy[0]:
+            src_ip_entropy[1].append(curr_src_ip_entropy)
+            dst_ip_entropy[1].append(curr_dst_ip_entropy)
+            src_port_entropy[1].append(curr_src_port_entropy)
+            dst_port_entropy[1].append(curr_dst_port_entropy)
+            bytes_per_pkt_entropy[1].append(curr_bytes_per_pkt_entropy)
         else:
-            self.que.put(nsdata)
-            break
-    #calculate information entropy
-    curr_src_ip_entropy = cal_info_entropy(flow_count, src_ip)
-    curr_dst_ip_entropy = cal_info_entropy(flow_count, src_ip)
-    curr_src_port_entropy = cal_info_entropy(flow_count, src_ip)
-    curr_dst_port_entropy = cal_info_entropy(flow_count, src_ip)
-    curr_bytes_per_pkt_entropy = cal_info_entropy(flow_count, src_ip)
+            #compare with the predict information entropy
+            src_ip_std = np.std(src_ip_entropy[0], ddof=1)
+            dst_ip_std = np.std(dst_ip_entropy[0], ddof=1)
+            src_port_std = np.std(src_port_entropy[0], ddof=1)
+            dst_port_std = np.std(dst_port_entropy[0], ddof=1)
+            bytes_per_pkt_std = np.std(bytes_per_pkt_entropy[0], ddof=1)
 
-    #use exponential smoothing predicting model
-    if src_ip_entropy[0]:
-        src_ip_entropy[1].append(curr_src_ip_entropy)
-        dst_ip_entropy[1].append(curr_dst_ip_entropy)
-        src_port_entropy[1].append(curr_src_port_entropy)
-        dst_port_entropy[1].append(curr_dst_port_entropy)
-        bytes_per_entropy[1].append(curr_bytes_per_entropy)
-    else:
-        #compare with the predict information entropy
-        src_ip_std = np.std(src_ip_entropy[0], ddof=1)
-        dst_ip_std = np.std(dst_ip_entropy[0], ddof=1)
-        src_port_std = np.std(src_port_entropy[0], ddof=1)
-        dst_port_std = np.std(dst_port_entropy[0], ddof=1)
-        bytes_per_pkt_std = np.std(self.bytes_per_pkt_entropy[0], ddof=1)
+            if abs(src_ip_entropy[1][-1] - src_ip_entropy) >= 3 * src_ip_std:
+                if abs(dst_ip_entropy[1][-1] - dst_ip_entropy) >= 3 * dst_ip_std:
+                    if abs(src_port_entropy[1][-1] - src_port_entropy) >= 3 * src_port_std:
+                        if abs(dst_port_entropy[1][-1] - dst_port_entropy) >= 3 * dst_port_std:
+                            if abs(bytes_per_entropy[1][-1] - bytes_per_entropy) >= 3 * bytes_per_pkt_std:
+                                self.logger.info('Waring: the system may be under tcp syn flood attack!')
 
-        if abs(src_ip_entropy[1][-1] - src_ip_entropy) >= 3 * src_ip_std:
-            if abs(dst_ip_entropy[1][-1] - dst_ip_entropy) >= 3 * dst_ip_std:
-                if abs(src_port_entropy[1][-1] - src_port_entropy) >= 3 * src_port_std:
-                    if abs(dst_port_entropy[1][-1] - dst_port_entropy) >= 3 * dst_port_std:
-                        if abs(bytes_per_entropy[1][-1] - bytes_per_entropy) >= 3 * bytes_per_pkt_std:
-                            pass
+            src_ip_entropy[1].append(alpha * curr_src_ip_entropy +
+                                     (1 - alpha) * src_ip_entropy[1][-1])
+            dst_ip_entropy[1].append(alpha * curr_dst_ip_entropy +
+                                     (1 - alpha) * dst_ip_entropy[1][-1])
+            src_port_entropy[1].append(alpha * curr_src_port_entropy +
+                                       (1 - alpha) * src_port_entropy[1][-1])
+            dst_port_entropy[1].append(alpha * curr_dst_port_entropy +
+                                       (1 - alpha) * dst_port_entropy[1][-1])
+            bytes_per_pkt_entropy[1].append(alpha * curr_bytes_per_pkt_entropy +
+                                            (1 - alpha) * bytes_per_pkt_entropy[1][-1])
 
-        src_ip_entropy[1].append(alpha * curr_src_ip_entropy +
-                                 (1 - alpha) * src_ip_entropy[1][-1])
-        dst_ip_entropy[1].append(alpha * curr_dst_ip_entropy +
-                                 (1 - alpha) * dst_ip_entropy[1][-1])
-        src_port_entropy[1].append(alpha * curr_src_port_entropy +
-                                   (1 - alpha) * src_port_entropy[1][-1])
-        dst_port_entropy[1].append(alpha * curr_dst_port_entropy +
-                                   (1 - alpha) * dst_port_entropy[1][-1])
-        bytes_per_pkt_entropy[1].append(alpha * curr_bytes_per_pkt_entropy +
-                                             (1 - alpha) * bytes_per_pkt_entropy[1][-1])
+        if len(src_ip_entropy[0]) >= MAX_ENTROPY_COUNT:
+            src_ip_entropy[0].pop(0)
+            dst_ip_entropy[0].pop(0)
+            src_port_entropy[0].pop(0)
+            dst_port_entropy[0].pop(0)
+            bytes_per_pkt_entropy[0].pop(0)
+            src_ip_entropy[1].pop(0)
+            dst_ip_entropy[1].pop(0)
+            src_port_entropy[1].pop(0)
+            dst_port_entropy[1].pop(0)
+            bytes_per_pkt_entropy[1].pop(0)
 
-    if len(src_ip_entropy[0]) >= MAX_ENTROPY_COUNT:
-        src_ip_entropy[0].pop(0)
-        dst_ip_entropy[0].pop(0)
-        src_port_entropy[0].pop(0)
-        dst_port_entropy[0].pop(0)
-        bytes_per_pkt_entropy[1].pop(0)
-        src_ip_entropy[1].pop(0)
-        dst_ip_entropy[1].pop(0)
-        src_port_entropy[1].pop(0)
-        dst_port_entropy[1].pop(0)
-        bytes_per_pkt_entropy[1].pop(0)
+        src_ip_entropy[0].append(curr_src_ip_entropy)
+        dst_ip_entropy[0].append(curr_dst_ip_entropy)
+        src_port_entropy[0].append(curr_src_port_entropy)
+        dst_port_entropy[0].append(curr_dst_port_entropy)
+        bytes_per_pkt_entropy[0].append(curr_bytes_per_pkt_entropy)
 
-    src_ip_entropy[0].append(curr_src_ip_entropy)
-    dst_ip_entropy[0].append(curr_dst_ip_entropy)
-    src_port_entropy[0].append(curr_src_port_entropy)
-    dst_port_entropy[0].append(curr_dst_port_entropy)
-    self.bytes_per_pkt_entropy[0].append(curr_bytes_per_pkt_entropy)
+        time.sleep(POLLING_TIME)
 
-    time.sleep(POLLING_TIME)
+    def parser_netstream_packet(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(('0.0.0.0', 6666))
+        while True:
+            buf, addr = sock.recvfrom(MAX_SIZE_OF_NS_PACKET)
+            self.logger.info("receive netstream packet from %s", addr)
+            (version, count) = struct.unpack('!HH', buf[0:4])
+            if version != 5:
+                continue
+            # It's pretty unlikely you'll ever see more then 1000 records in a 1500 byte UDP packet
+            if count <= 0 or count > 30:
+                continue
 
-def parser_netstream_packet(que):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('0.0.0.0', 6666))
-    while True:
-        buf, addr = sock.recvfrom(MAX_SIZE_OF_NS_PACKET)
-
-        (version, count) = struct.unpack('!HH', buf[0:4])
-        if version != 5:
-            continue
-        # It's pretty unlikely you'll ever see more then 1000 records in a 1500 byte UDP packet
-        if count <= 0 or count > 30:
-            continue
-
-        #uptime = socket.ntohl(struct.unpack('I',buf[4:8])[0])
-        #epochseconds = socket.ntohl(struct.unpack('I',buf[8:12])[0])
-
-        for i in range(0, count):
-            try:
+            #uptime = socket.ntohl(struct.unpack('I',buf[4:8])[0])
+            #epochseconds = socket.ntohl(struct.unpack('I',buf[8:12])[0])
+            for i in range(0, count):
                 base = SIZE_OF_HEADER + (i * SIZE_OF_RECORD)
-
                 nsdata = {}
-
-                nsdata['protocol'] = struct.unpack('B', buf[base+38])
+                nsdata['protocol'] = struct.unpack('B', buf[base+38:base+39])[0]
                 if nsdata['protocol'] != IP_TCP:
-                    pass
+                    continue
 
-                nsdata['src_ip'] = struct.unpack('!I', buf[base+0:base+4])
-                nsdata['dst_ip'] = struct.unpack('!I', buf[base+4:base+8])
+                nsdata['src_ip'] = struct.unpack('!I', buf[base+0:base+4])[0]
+                nsdata['dst_ip'] = struct.unpack('!I', buf[base+4:base+8])[0]
 
                 data = struct.unpack('!IIIIHH', buf[base+16:base+36])
                 nsdata['bytes_per_pkt'] = data[1] // data[0]
                 nsdata['src_port'] = data[4]
                 nsdata['dst_port'] = data[5]
-                nsdata['timestamp'] = time.time()
-                que.put(nsdata)
-            except Exception:
-                continue
+                nsdata['timestamp'] = int(time.time())
+                #self.logger.info('nsdata : %s', nsdata)
+                self.que.put(nsdata)
 
 def check_if_exists(key, net_dict):
     if key in net_dict:
@@ -240,6 +240,6 @@ def check_if_exists(key, net_dict):
 
 def cal_info_entropy(num, net_dict):
     info_entropy = 0.0
-    for n in net_dict.valuse():
+    for n in net_dict.values():
         info_entropy = info_entropy + n / num * math.log(2, n / num)
     return -1 * info_entropy
