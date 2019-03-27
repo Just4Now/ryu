@@ -41,7 +41,7 @@ class NetStreamAnalyzer13(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
-        super(SimpleSwitch13, self).__init__(*args, **kwargs)
+        super(NetStreamAnalyzer13, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
         self.info_entropy = {}
         self.que = Queue()
