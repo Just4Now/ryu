@@ -19,6 +19,7 @@ PREDICT = 1
 DETECT_FLAG = False
 
 class NetStreamAnalyzer(app_manager.RyuApp):
+
     def __init__(self, *args, **kwargs):
         super(NetStreamAnalyzer, self).__init__(*args, **kwargs)
         self.info_entropy = {}
@@ -61,7 +62,7 @@ class NetStreamAnalyzer(app_manager.RyuApp):
                 break
         #calculate information entropy for each netstream system
         
-        for system_ip, seq in self.info_entropy.items():
+        for system_ip, ip_entropy_seq in self.info_entropy.items():
             flow_count = 0
             curr_src_ip_entropy = 0
             curr_dst_ip_entropy = 0
@@ -75,66 +76,66 @@ class NetStreamAnalyzer(app_manager.RyuApp):
                 curr_src_port_entropy = cal_info_entropy(flow_count, netstream_record[system_ip]['src_port'])
                 curr_dst_port_entropy = cal_info_entropy(flow_count, netstream_record[system_ip]['dst_port'])
                 curr_bytes_per_pkt_entropy = cal_info_entropy(flow_count, netstream_record[system_ip]['bytes_per_pkt'])
-            # if flow_count == 0 and not seq['src_ip'][ACTUAL]:
+            # if flow_count == 0 and not ip_entropy_seq['src_ip'][ACTUAL]:
                 # continue
 
             #use exponential smoothing predicting model
-            if not seq['src_ip'][ACTUAL]:
-                seq['src_ip'][PREDICT].append(curr_src_ip_entropy)
-                seq['dst_ip'][PREDICT].append(curr_dst_ip_entropy)
-                seq['src_port'][PREDICT].append(curr_src_port_entropy)
-                seq['dst_port'][PREDICT].append(curr_dst_port_entropy)
-                seq['bytes_per_pkt'][PREDICT].append(curr_bytes_per_pkt_entropy)
+            if not ip_entropy_seq['src_ip'][ACTUAL]:
+                ip_entropy_seq['src_ip'][PREDICT].append(curr_src_ip_entropy)
+                ip_entropy_seq['dst_ip'][PREDICT].append(curr_dst_ip_entropy)
+                ip_entropy_seq['src_port'][PREDICT].append(curr_src_port_entropy)
+                ip_entropy_seq['dst_port'][PREDICT].append(curr_dst_port_entropy)
+                ip_entropy_seq['bytes_per_pkt'][PREDICT].append(curr_bytes_per_pkt_entropy)
             else:
                 #compare with the predict information entropy
-                src_ip_std = np.std(seq['src_ip'][ACTUAL], ddof=1)
-                dst_ip_std = np.std(seq['dst_ip'][ACTUAL], ddof=1)
-                src_port_std = np.std(seq['src_port'][ACTUAL], ddof=1)
-                dst_port_std = np.std(seq['dst_port'][ACTUAL], ddof=1)
-                bytes_per_pkt_std = np.std(seq['bytes_per_pkt'][ACTUAL], ddof=1)
+                src_ip_std = np.std(ip_entropy_seq['src_ip'][ACTUAL], ddof=1)
+                dst_ip_std = np.std(ip_entropy_seq['dst_ip'][ACTUAL], ddof=1)
+                src_port_std = np.std(ip_entropy_seq['src_port'][ACTUAL], ddof=1)
+                dst_port_std = np.std(ip_entropy_seq['dst_port'][ACTUAL], ddof=1)
+                bytes_per_pkt_std = np.std(ip_entropy_seq['bytes_per_pkt'][ACTUAL], ddof=1)
 
-                if abs(seq['src_ip'][PREDICT][-1] - curr_src_ip_entropy) >= 3 * src_ip_std and \
-                   abs(seq['dst_ip'][PREDICT][-1] - curr_dst_ip_entropy) >= 3 * dst_ip_std and \
-                   abs(seq['src_port'][PREDICT][-1] - curr_src_port_entropy) >= 3 * src_port_std and \
-                   abs(seq['dst_port'][PREDICT][-1] - curr_dst_port_entropy) >= 3 * dst_port_std and \
-                   abs(seq['bytes_per_pkt'][PREDICT][-1] - curr_bytes_per_pkt_entropy) >= 3 * bytes_per_pkt_std:
-                    self.logger.info('Waring: the system(%s) may be under TCP SYN flooding attack!(%s)', %(ip_addr, \
-                                     time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())))
+                if abs(ip_entropy_seq['src_ip'][PREDICT][-1] - curr_src_ip_entropy) >= 3 * src_ip_std and \
+                   abs(ip_entropy_seq['dst_ip'][PREDICT][-1] - curr_dst_ip_entropy) >= 3 * dst_ip_std and \
+                   abs(ip_entropy_seq['src_port'][PREDICT][-1] - curr_src_port_entropy) >= 3 * src_port_std and \
+                   abs(ip_entropy_seq['dst_port'][PREDICT][-1] - curr_dst_port_entropy) >= 3 * dst_port_std and \
+                   abs(ip_entropy_seq['bytes_per_pkt'][PREDICT][-1] - curr_bytes_per_pkt_entropy) >= 3 * bytes_per_pkt_std:
+                    self.logger.info('Waring: the host(%s) may be under TCP SYN flooding attack!(%s)', ip_addr, \
+                                     time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
 
-            seq['src_ip'][PREDICT].append(alpha * curr_src_ip_entropy +
-                                                                 (1 - alpha) * seq['src_ip'][PREDICT][-1])
-            seq['dst_ip'][PREDICT].append(alpha * curr_dst_ip_entropy +
-                                                                 (1 - alpha) * seq['dst_ip'][PREDICT][-1])
-            seq['src_port'][PREDICT].append(alpha * curr_src_port_entropy +
-                                                                 (1 - alpha) * seq['src_port'][PREDICT][-1])
-            seq['dst_port'][PREDICT].append(alpha * curr_dst_port_entropy +
-                                                                 (1 - alpha) * seq['sdst_port'][PREDICT][-1])
-            seq['bytes_per_pkt'][PREDICT].append(alpha * curr_bytes_per_pkt_entropy +
-                                                                 (1 - alpha) * seq['bytes_per_pkt'][PREDICT][-1]
+            ip_entropy_seq['src_ip'][PREDICT].append(alpha * curr_src_ip_entropy + \
+                                                     (1 - alpha) * ip_entropy_seq['src_ip'][PREDICT][-1])
+            ip_entropy_seq['dst_ip'][PREDICT].append(alpha * curr_dst_ip_entropy + \
+                                                     (1 - alpha) * ip_entropy_seq['dst_ip'][PREDICT][-1])
+            ip_entropy_seq['src_port'][PREDICT].append(alpha * curr_src_port_entropy + \
+                                                       (1 - alpha) * ip_entropy_seq['src_port'][PREDICT][-1])
+            ip_entropy_seq['dst_port'][PREDICT].append(alpha * curr_dst_port_entropy + \
+                                                       (1 - alpha) * ip_entropy_seq['sdst_port'][PREDICT][-1])
+            ip_entropy_seq['bytes_per_pkt'][PREDICT].append(alpha * curr_bytes_per_pkt_entropy + \
+                                                            (1 - alpha) * ip_entropy_seq['bytes_per_pkt'][PREDICT][-1])
 
-            seq['src_ip'][ACTUAL].append(curr_src_ip_entropy)
-            seq['src_ip'][ACTUAL].append(curr_dst_ip_entropy)
-            seq['src_ip'][ACTUAL].append(curr_src_port_entropy)
-            seq['src_ip'][ACTUAL].append(curr_dst_port_entropy)
-            seq['src_ip'][ACTUAL].append(curr_bytes_per_pkt_entropy)
-            
-            if len(seq['src_ip'][ACTUAL]) >= MAX_ENTROPY_COUNT:
-                seq['src_ip'][ACTUAL].pop(0)
-                seq['src_ip'][PREDICT].pop(0)
-                seq['dst_ip'][ACTUAL].pop(0)
-                seq['dst_ip'][PREDICT].pop(0)
-                seq['src_port'][ACTUAL].pop(0)
-                seq['src_port'][PREDICT].pop(0)
-                seq['dst_port'][ACTUAL].pop(0)
-                seq['dst_port'][PREDICT].pop(0)
-                seq['bytes_per_pkt'][ACTUAL].pop(0)
-                seq['bytes_per_pkt'][PREDICT].pop(0)
+            ip_entropy_seq['src_ip'][ACTUAL].append(curr_src_ip_entropy)
+            ip_entropy_seq['dst_ip'][ACTUAL].append(curr_dst_ip_entropy)
+            ip_entropy_seq['src_port'][ACTUAL].append(curr_src_port_entropy)
+            ip_entropy_seq['dst_port'][ACTUAL].append(curr_dst_port_entropy)
+            ip_entropy_seq['bytes_per_pkt'][ACTUAL].append(curr_bytes_per_pkt_entropy)
+
+            if len(ip_entropy_seq['src_ip'][ACTUAL]) >= MAX_ENTROPY_COUNT:
+                ip_entropy_seq['src_ip'][ACTUAL].pop(0)
+                ip_entropy_seq['src_ip'][PREDICT].pop(0)
+                ip_entropy_seq['dst_ip'][ACTUAL].pop(0)
+                ip_entropy_seq['dst_ip'][PREDICT].pop(0)
+                ip_entropy_seq['src_port'][ACTUAL].pop(0)
+                ip_entropy_seq['src_port'][PREDICT].pop(0)
+                ip_entropy_seq['dst_port'][ACTUAL].pop(0)
+                ip_entropy_seq['dst_port'][PREDICT].pop(0)
+                ip_entropy_seq['bytes_per_pkt'][ACTUAL].pop(0)
+                ip_entropy_seq['bytes_per_pkt'][PREDICT].pop(0)
 
         time.sleep(POLLING_TIME)
 
     def parser_netstream_packet(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind(('0.0.0.0', 6666))
+        sock.bind(('0.0.0.0', 6677))
         while True:
             buf, addr = sock.recvfrom(MAX_SIZE_OF_NS_PACKET)
             self.logger.info("receive netstream packet from %s", addr)
