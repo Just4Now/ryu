@@ -133,5 +133,15 @@ def linshi():
             sendp(a,iface='en4',count=random.randint(10,200))
         sleep(15)
 
-
-case4()
+def case_detect():
+    while True:
+        i = 80 + random.randint(-20,20)
+        j = 0
+        while j < i:
+            data1 = 'a' * random.randint(1, 1000)
+            sp = randport()
+            dp = randport()
+            l.append(Ether(dst='00:00:00:00:00:01')/IP(src=randip(), dst=randip())/TCP(sport=sp, dport=dp, flags=0)/data3)
+            for a in l:
+                    sendp(a,inter=1,iface='en4',count=random.randint(0,160))
+            j = j + 1
